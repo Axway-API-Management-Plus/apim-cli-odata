@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration>
+    <Appenders>
+        <!-- Logs go to stderr, so that the OpenAPI specification written to stdout stays clean -->
+        <Console name="STDERR" target="SYSTEM_ERR">
+            <PatternLayout pattern="%d [%c{1}] %-5level: %msg%n%throwable"/>
+        </Console>
+    </Appenders>
+    <Loggers>
+        <Logger name="com.axway.apim" level="${env:LOG_LEVEL:-info}"/>
+        <Root level="warn">
+            <AppenderRef ref="STDERR"/>
+        </Root>
+    </Loggers>
+</Configuration>
