@@ -85,7 +85,8 @@ public abstract class ODataSpecification {
 
     public byte[] getApiSpecificationContent() {
         FilterProvider filter = new SimpleFilterProvider().setDefaultFilter(
-            SimpleBeanPropertyFilter.serializeAllExcept("exampleSetFlag"));
+            // "types" is the OpenAPI 3.1 representation of "type", which newer swagger-models add to every schema
+            SimpleBeanPropertyFilter.serializeAllExcept("exampleSetFlag", "types"));
         // Use builder to avoid deprecated mutating configure() method (removed in Jackson 2.19+)
         ObjectMapper mapper = JsonMapper.builder()
             .enable(SerializationFeature.INDENT_OUTPUT)
