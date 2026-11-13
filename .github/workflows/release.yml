@@ -1,0 +1,95 @@
+name: Release
+
+# Creates a GitHub release when a version tag is pushed:
+#   git tag v1.0.0 && git push origin v1.0.0
+# Tags with a suffix (e.g. v1.0.0-rc1) are published as pre-releases.
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to (re)build the release for, e.g. v1.0.0'
+        required: true
+
+permissions:
+  contents: write   # create the release and upload the assets
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Validate tag
+        run: |
+          if ! echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'; then
+            echo "::error::'$TAG' is not a valid version tag (expected v<major>.<minor>.<patch>[-suffix])"
+            exit 1
+          fi
+          echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'   # the project is compiled for Java 11 (maven.compiler.release)
+          cache: maven
+
+      - name: Set version from tag
+        run: mvn -B -ntp versions:set -DnewVersion="$VERSION" -DgenerateBackupPoms=false
+
+      - name: Build and test
+        run: mvn -B -ntp clean verify
+
+      - name: Package distribution
+        run: |
+          NAME="apim-cli-odata-$VERSION"
+          JAR="target/$NAME-cli.jar"
+          test -f "$JAR" || { echo "::error::$JAR was not created"; exit 1; }
+          mkdir -p "dist/$NAME"
+          cp "$JAR" apim-odata.sh apim-odata.bat README.md LICENSE "dist/$NAME/"
+          cp -r examples "dist/$NAME/examples"
+          chmod +x "dist/$NAME/apim-odata.sh"
+          (cd dist && tar -czf "$NAME.tar.gz" "$NAME" && zip -qr "$NAME.zip" "$NAME")
+          cp "$JAR" "dist/$NAME-cli.jar"
+          cd dist
+          sha256sum "$NAME.tar.gz" "$NAME.zip" "$NAME-cli.jar" > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Smoke test the packaged CLI
+        run: |
+          NAME="apim-cli-odata-$VERSION"
+          mkdir -p smoke && tar -xzf "dist/$NAME.tar.gz" -C smoke
+          "smoke/$NAME/apim-odata.sh" convert -m "smoke/$NAME/examples/northwind-v2-metadata.xml" \
+            -b https://services.odata.org/V2/Northwind/Northwind.svc -o smoke/openapi.json
+          grep -q '"openapi"' smoke/openapi.json
+
+      - name: Create GitHub release
+        run: |
+          PRERELEASE=""
+          case "$VERSION" in *-*) PRERELEASE="--prerelease" ;; esac
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG exists, replacing its assets"
+            gh release upload "$TAG" --clobber \
+              "dist/apim-cli-odata-$VERSION.tar.gz" "dist/apim-cli-odata-$VERSION.zip" \
+              "dist/apim-cli-odata-$VERSION-cli.jar" dist/SHA256SUMS.txt
+          else
+            gh release create "$TAG" $PRERELEASE \
+              --title "apim-cli-odata $VERSION" \
+              --generate-notes \
+              --verify-tag \
+              "dist/apim-cli-odata-$VERSION.tar.gz" "dist/apim-cli-odata-$VERSION.zip" \
+              "dist/apim-cli-odata-$VERSION-cli.jar" dist/SHA256SUMS.txt
+          fi
